@@ -9,14 +9,17 @@
   shallow = true
 	path = External/fex-posixtest-bins
 	url = https://github.com/FEX-Emu/fex-posixtest-bins.git
+	update = none
 [submodule "External/fex-gvisor-tests-bins"]
   shallow = true
 	path = External/fex-gvisor-tests-bins
 	url = https://github.com/FEX-Emu/fex-gvisor-tests-bins.git
+	update = none
 [submodule "External/fex-gcc-target-tests-bins"]
   shallow = true
 	path = External/fex-gcc-target-tests-bins
 	url = https://github.com/FEX-Emu/fex-gcc-target-tests-bins.git
+	update = none
 [submodule "External/fmt"]
 	path = External/fmt
 	url = https://github.com/fmtlib/fmt.git
