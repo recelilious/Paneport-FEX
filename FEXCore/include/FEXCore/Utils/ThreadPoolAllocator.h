@@ -405,7 +405,7 @@ private:
 /**
  * @brief Thread pool allocator that allocates and frees objects that uses mmap, with a guard page.
  *
- * The last page of the size provided has the guard.
+ * The last FEX_GUARD_SIZE bytes of the size provided are the guard.
  */
 class PooledAllocatorVirtualWithGuard final : public IntrusivePooledAllocator {
 public:
@@ -420,8 +420,8 @@ public:
 private:
   void* Alloc(size_t Size) override {
     auto Ptr = FEXCore::Allocator::VirtualAlloc(Size);
-    uintptr_t LastPageAddr = AlignDown(reinterpret_cast<uintptr_t>(Ptr) + Size - 1, FEXCore::Utils::FEX_PAGE_SIZE);
-    if (!FEXCore::Allocator::VirtualProtect(reinterpret_cast<void*>(LastPageAddr), FEXCore::Utils::FEX_PAGE_SIZE,
+    uintptr_t LastPageAddr = AlignDown(reinterpret_cast<uintptr_t>(Ptr) + Size - 1, FEXCore::Utils::FEX_GUARD_SIZE);
+    if (!FEXCore::Allocator::VirtualProtect(reinterpret_cast<void*>(LastPageAddr), FEXCore::Utils::FEX_GUARD_SIZE,
                                             FEXCore::Allocator::ProtectOptions::None)) {
       LogMan::Msg::EFmt("Failed to mprotect last page of code buffer.");
     }

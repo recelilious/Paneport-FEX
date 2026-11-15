@@ -68,10 +68,10 @@ struct CodeBuffer {
 
   // Returns the total number of bytes available for storing code
   size_t UsableSize() const {
-    return AllocatedSize - FEXCore::Utils::FEX_PAGE_SIZE;
+    return AllocatedSize - FEXCore::Utils::FEX_GUARD_SIZE;
   }
 
-  // Returns the full size of the buffer, including the guard page.
+  // Returns the full size of the buffer, including the guard region.
   size_t TotalAllocationSize() const {
     return AllocatedSize;
   }
@@ -94,7 +94,7 @@ struct CodeBuffer {
 private:
   uint8_t* Ptr;
   uint8_t* CodeBufferEnd;
-  size_t AllocatedSize; // including guard page; see UsableSize()
+  size_t AllocatedSize; // including the guard region; see UsableSize()
 
   // Code buffer allocation information.
   std::atomic<uint8_t*> CodeBufferOffset {};
