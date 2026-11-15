@@ -437,7 +437,10 @@ void CodeCache::Validate(const ExecutableFileSectionInfo& Section, fextl::set<ui
   NewRelocations.erase(std::remove_if(NewRelocations.begin(), NewRelocations.end(), [](const CPU::Relocation& Reloc) {
     return Reloc.Header.Type != CPU::RelocationTypes::RELOC_NAMED_SYMBOL_LITERAL && Reloc.Header.Type != CPU::RelocationTypes::RELOC_NAMED_THUNK_MOVE;
   }));
-  (void)ApplyCodeRelocations(Section.FileStartVA, CodeBufferRangeRef, NewRelocations, false);
+  {
+    Allocator::JITWriteScope WriteScope;
+    (void)ApplyCodeRelocations(Section.FileStartVA, CodeBufferRangeRef, NewRelocations, false);
+  }
 
   if (NewCodeBuffer->AllocatedSpaceUsed() <= CodeBufferRangeRef.size()) {
     // Reference compilation produced fewer bytes than our cache, so validation is going to fail.
@@ -988,13 +991,16 @@ void CodeCache::FinalizeCodePages(MappedCodeCacheFile& Code, std::span<std::byte
   Allocator::VirtualDontNeed(Code.CodeBufferInFile.data() + StartOffset, Size);
 #else
   // TODO: Implement lazy mapping on Windows
+  {
+    Allocator::JITWriteScope WriteScope;
 #ifdef _M_ARM64EC
-  memcpy(Code.CodeBuffer.data() + StartOffset, Code.CodeBufferInFile.data() + StartOffset, Size);
+    memcpy(Code.CodeBuffer.data() + StartOffset, Code.CodeBufferInFile.data() + StartOffset, Size);
 #endif
-  for (size_t i = StartPage; i < EndPage; ++i) {
-    auto PageRelocations = SpanPageRelocations(Code, i);
-    (void)ApplyCodeRelocations(Code.GuestBase, Code.CodeBuffer, PageRelocations, false);
-    Code.LoadedPages[i] = true;
+    for (size_t i = StartPage; i < EndPage; ++i) {
+      auto PageRelocations = SpanPageRelocations(Code, i);
+      (void)ApplyCodeRelocations(Code.GuestBase, Code.CodeBuffer, PageRelocations, false);
+      Code.LoadedPages[i] = true;
+    }
   }
 #endif
 

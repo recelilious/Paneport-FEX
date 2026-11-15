@@ -148,6 +148,34 @@ inline void VirtualTHPControl(const void* Ptr, size_t Size, THPControl Control) 
 
 #endif
 
+// Some hosts never let a thread write to memory that holds generated code while it may execute
+// that memory, macOS on Apple silicon among them. The frontend for such a host installs this hook,
+// which makes that memory writable for the calling thread (false) or executable again (true).
+using JITWriteProtectPtr = void (*)(bool Protect);
+FEX_DEFAULT_VISIBILITY extern JITWriteProtectPtr JITWriteProtect;
+
+/**
+ * @brief Makes generated code writable for the current thread for the lifetime of the scope.
+ *
+ * Every write to memory from VirtualAlloc(..., true) goes inside one. Scopes don't nest, and the
+ * thread must not run generated code while one is open.
+ */
+class JITWriteScope final {
+public:
+  JITWriteScope() {
+    if (JITWriteProtect) {
+      JITWriteProtect(false);
+    }
+  }
+  ~JITWriteScope() {
+    if (JITWriteProtect) {
+      JITWriteProtect(true);
+    }
+  }
+  JITWriteScope(const JITWriteScope&) = delete;
+  JITWriteScope& operator=(const JITWriteScope&) = delete;
+};
+
 // Memory allocation routines to be defined externally.
 // This allows to use jemalloc for emulation while using the normal allocator
 // for host tools without building FEXCore twice.

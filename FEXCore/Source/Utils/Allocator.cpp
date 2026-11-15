@@ -329,4 +329,6 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
 }
 
 #endif
+
+JITWriteProtectPtr JITWriteProtect {};
 } // namespace FEXCore::Allocator
