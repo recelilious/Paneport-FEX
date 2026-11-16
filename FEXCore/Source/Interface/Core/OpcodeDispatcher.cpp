@@ -3719,6 +3719,8 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
   auto Size = OpSizeFromSrc(Op);
 
+  RaiseDivideErrorIfZero(Op, Size);
+
   // This loads the divisor. 32-bit/64-bit paths mask inside the JIT, 8/16 do not.
   Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
 
@@ -3757,6 +3759,8 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
+  RaiseDivideErrorIfZero(Op, OpSizeFromSrc(Op));
+
   // This loads the divisor
   Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
 
@@ -5159,6 +5163,36 @@ void OpDispatchBuilder::BreakOp(OpcodeArgs, FEXCore::IR::BreakDefinition BreakDe
   } else {
     BlockSetRIP = true;
   }
+}
+
+void OpDispatchBuilder::RaiseDivideErrorIfZero(OpcodeArgs, IR::OpSize Size) {
+#ifdef _WIN32
+  // x86 raises a divide error (#DE) when the divisor is zero, while ARM64's division returns zero.
+  // Branch to a block at the end that raises it at this instruction, which the Windows frontends
+  // turn into EXCEPTION_INT_DIVIDE_BY_ZERO, and go on in a block right after this one.
+  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+  CalculateDeferredFlags();
+  auto CondJump_ =
+    CondJump(Divisor, Constant(0), InvalidNode, InvalidNode, CondClass::EQ, Size == OpSize::i64Bit ? OpSize::i64Bit : OpSize::i32Bit);
+
+  auto ContinueBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetFalseJumpTarget(CondJump_, ContinueBlock);
+  auto TrapBlock = CreateNewCodeBlockAtEnd();
+  SetTrueJumpTarget(CondJump_, TrapBlock);
+
+  SetCurrentCodeBlock(TrapBlock);
+  StartNewBlock();
+  _StoreContextGPR(GetGPROpSize(), GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+  Break(FEXCore::IR::BreakDefinition {
+    .ErrorRegister = 0,
+    .Signal = Core::FAULT_SIGSEGV,
+    .TrapNumber = X86State::X86_TRAPNO_DE,
+    .si_code = 0,
+  });
+
+  SetCurrentCodeBlock(ContinueBlock);
+  StartNewBlock();
+#endif
 }
 
 void OpDispatchBuilder::UnimplementedOp(OpcodeArgs) {

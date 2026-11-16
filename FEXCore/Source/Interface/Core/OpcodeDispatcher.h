@@ -895,6 +895,7 @@ public:
   void Insertq(OpcodeArgs);
 
   void BreakOp(OpcodeArgs, FEXCore::IR::BreakDefinition BreakDefinition);
+  void RaiseDivideErrorIfZero(OpcodeArgs, IR::OpSize Size);
   void UnimplementedOp(OpcodeArgs);
   void PermissionRestrictedOp(OpcodeArgs);
 
