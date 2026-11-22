@@ -159,6 +159,11 @@ FEX_DEFAULT_VISIBILITY extern JITWriteProtectPtr JITWriteProtect;
  *
  * Every write to memory from VirtualAlloc(..., true) goes inside one. Scopes don't nest, and the
  * thread must not run generated code while one is open.
+ *
+ * A scope can also count itself in a depth that belongs to the calling thread, such as its
+ * InternalThreadState's JITWriteScopeDepth. A host that keeps generated code writable for every
+ * thread lets a write outside a scope through, so code that writes to generated code from an
+ * exception handler checks that depth instead.
  */
 class JITWriteScope final {
 public:
@@ -167,13 +172,24 @@ public:
       JITWriteProtect(false);
     }
   }
+  explicit JITWriteScope(uint32_t& Depth)
+    : JITWriteScope() {
+    CountedDepth = &Depth;
+    ++Depth;
+  }
   ~JITWriteScope() {
+    if (CountedDepth) {
+      --*CountedDepth;
+    }
     if (JITWriteProtect) {
       JITWriteProtect(true);
     }
   }
   JITWriteScope(const JITWriteScope&) = delete;
   JITWriteScope& operator=(const JITWriteScope&) = delete;
+
+private:
+  uint32_t* CountedDepth {};
 };
 
 // Memory allocation routines to be defined externally.

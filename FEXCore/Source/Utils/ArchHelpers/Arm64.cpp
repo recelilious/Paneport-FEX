@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 
 namespace FEXCore::ArchHelpers::Arm64 {
 constexpr uint32_t CASPAL_MASK = 0xBF'E0'FC'00;
@@ -2106,7 +2107,15 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
   // Multiple threads can be attempting to handle the SIGBUS or even be executing the code being backpatched.
   // The lock word lives in the block's tail in the code buffer as well, so the write scope opens before the
   // lock is taken and closes after it is released.
-  FEXCore::Allocator::JITWriteScope WriteScope;
+  FEXCore::Allocator::JITWriteScope WriteScope(Thread->JITWriteScopeDepth);
+  // A host that keeps generated code writable for every thread, such as a macOS virtual machine, lets the
+  // writes below through without the scope, so its depth is checked right before the first of them. The
+  // message goes to stderr because FEX's log is silent by default.
+  if (Thread->JITWriteScopeDepth == 0) {
+    static constexpr char Message[] = "FEX: the unaligned access handler would write to generated code outside a JITWriteScope\n";
+    fwrite(Message, 1, sizeof(Message) - 1, stderr);
+    return std::nullopt;
+  }
   FEXCore::Utils::SpinWaitLock::UniqueSpinMutex lk(&InlineTail->SpinLockFutex);
 
   if ((Instr & LDAXR_MASK) == LDAR_INST ||  // LDAR*

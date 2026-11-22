@@ -116,6 +116,9 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
 
   uintptr_t JITGuardPage {};
   uint64_t JITGuardOverflowArgument {};
+
+  // The JITWriteScopes open on this thread that count themselves here, see JITWriteScope.
+  uint32_t JITWriteScopeDepth {};
   FEXCore::UncheckedLongJump::JumpBuf RestartJump;
 
   // BaseFrameState should always be at the end, directly before the interrupt fault page
