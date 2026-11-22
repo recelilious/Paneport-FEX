@@ -13,7 +13,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 
 namespace FEXCore::ArchHelpers::Arm64 {
 constexpr uint32_t CASPAL_MASK = 0xBF'E0'FC'00;
@@ -2110,13 +2109,13 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
 #ifdef _WIN32
   FEXCore::Allocator::JITWriteScope WriteScope(Thread->JITWriteScopeDepth);
   // A host that keeps generated code writable for every thread, such as a macOS virtual machine, lets the
-  // writes below through without the scope, so its depth is checked right before the first of them. The
-  // message goes to stderr because FEX's log is silent by default.
+  // writes below through without the scope, so its depth is checked right before the first of them. The C
+  // library of the Windows frontend has no standard error stream, so the check reports through FEX's log,
+  // and the fault stays unhandled, so that the guest gets the misaligned access as an exception.
   if (Thread->JITWriteScopeDepth == 0) {
-    fprintf(stderr,
-            "FEX: write scope depth check: the unaligned access handler for the instruction at 0x%llx would write to "
-            "generated code outside a JITWriteScope\n",
-            static_cast<unsigned long long>(ProgramCounter));
+    LogMan::Msg::EFmt("Write scope depth check: the unaligned access handler would write to generated code outside a "
+                      "JITWriteScope, for the instruction at 0x{:x}",
+                      ProgramCounter);
     return std::nullopt;
   }
 #else
