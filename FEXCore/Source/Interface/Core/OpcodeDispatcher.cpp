@@ -3718,11 +3718,11 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
 void OpDispatchBuilder::DIVOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
   auto Size = OpSizeFromSrc(Op);
-
-  RaiseDivideErrorIfZero(Op, Size);
+  const auto CompareSize = Size == OpSize::i64Bit ? OpSize::i64Bit : OpSize::i32Bit;
 
   // This loads the divisor. 32-bit/64-bit paths mask inside the JIT, 8/16 do not.
-  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
+  Ref LoadedDivisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = Size >= OpSize::i32Bit});
+  Ref Divisor = DivisorOrOne(LoadedDivisor, CompareSize);
 
   if (Size == OpSize::i64Bit && !Is64BitMode) {
     LogMan::Msg::EFmt("Doesn't exist in 32bit mode");
@@ -3740,7 +3740,7 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
 
     // AX[15:0] = concat<URem[7:0]:UDiv[7:0]>
     auto ResultAX = _Bfi(GPRSize, 8, 8, Quotient, Remainder);
-    StoreGPRRegister(X86State::REG_RAX, ResultAX, OpSize::i16Bit);
+    StoreGPRRegister(X86State::REG_RAX, KeepIfDivisorZero(LoadedDivisor, CompareSize, Src1, ResultAX), OpSize::i16Bit);
   } else {
     Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
     Ref Src2 = LoadGPRRegister(X86State::REG_RDX);
@@ -3753,19 +3753,21 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
       Size = OpSize::iInvalid;
     }
 
-    StoreGPRRegister(X86State::REG_RAX, Quotient, Size);
-    StoreGPRRegister(X86State::REG_RDX, Remainder, Size);
+    StoreGPRRegister(X86State::REG_RAX, KeepIfDivisorZero(LoadedDivisor, CompareSize, Src1, Quotient), Size);
+    StoreGPRRegister(X86State::REG_RDX, KeepIfDivisorZero(LoadedDivisor, CompareSize, Src2, Remainder), Size);
   }
+
+  RaiseDivideErrorIfZero(Op, LoadedDivisor, CompareSize);
 }
 
 void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
-  RaiseDivideErrorIfZero(Op, OpSizeFromSrc(Op));
-
   // This loads the divisor
-  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+  Ref LoadedDivisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
 
   const auto GPRSize = GetGPROpSize();
   auto Size = OpSizeFromSrc(Op);
+  const auto CompareSize = Size == OpSize::i64Bit ? OpSize::i64Bit : OpSize::i32Bit;
+  Ref Divisor = DivisorOrOne(LoadedDivisor, CompareSize);
 
   if (Size == OpSize::i64Bit && !Is64BitMode) {
     LogMan::Msg::EFmt("Doesn't exist in 32bit mode");
@@ -3777,15 +3779,15 @@ void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
   Ref Remainder = _AllocateGPR(true);
 
   if (Size == OpSize::i8Bit) {
-    Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
-    Src1 = _Sbfe(OpSize::i64Bit, 16, 0, Src1);
+    Ref OldRAX = LoadGPRRegister(X86State::REG_RAX);
+    Ref Src1 = _Sbfe(OpSize::i64Bit, 16, 0, OldRAX);
     Divisor = _Sbfe(OpSize::i64Bit, 8, 0, Divisor);
 
     _Div(OpSize::i64Bit, Src1, Invalid(), Divisor, Quotient, Remainder);
 
     // AX[15:0] = concat<URem[7:0]:UDiv[7:0]>
     auto ResultAX = _Bfi(GPRSize, 8, 8, Quotient, Remainder);
-    StoreGPRRegister(X86State::REG_RAX, ResultAX, OpSize::i16Bit);
+    StoreGPRRegister(X86State::REG_RAX, KeepIfDivisorZero(LoadedDivisor, CompareSize, OldRAX, ResultAX), OpSize::i16Bit);
   } else {
     Ref Src1 = LoadGPRRegister(X86State::REG_RAX);
     Ref Src2 = LoadGPRRegister(X86State::REG_RDX);
@@ -3798,9 +3800,11 @@ void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
       Size = OpSize::iInvalid;
     }
 
-    StoreGPRRegister(X86State::REG_RAX, Quotient, Size);
-    StoreGPRRegister(X86State::REG_RDX, Remainder, Size);
+    StoreGPRRegister(X86State::REG_RAX, KeepIfDivisorZero(LoadedDivisor, CompareSize, Src1, Quotient), Size);
+    StoreGPRRegister(X86State::REG_RDX, KeepIfDivisorZero(LoadedDivisor, CompareSize, Src2, Remainder), Size);
   }
+
+  RaiseDivideErrorIfZero(Op, LoadedDivisor, CompareSize);
 }
 
 void OpDispatchBuilder::BSFOp(OpcodeArgs) {
@@ -5165,15 +5169,32 @@ void OpDispatchBuilder::BreakOp(OpcodeArgs, FEXCore::IR::BreakDefinition BreakDe
   }
 }
 
-void OpDispatchBuilder::RaiseDivideErrorIfZero(OpcodeArgs, IR::OpSize Size) {
+Ref OpDispatchBuilder::DivisorOrOne(Ref Divisor, IR::OpSize CompareSize) {
+#ifdef _WIN32
+  // The division still runs before RaiseDivideErrorIfZero raises #DE, so it divides by one instead of zero.
+  return _Select(GetGPROpSize(), CompareSize, CondClass::EQ, Divisor, Constant(0), Constant(1), Divisor);
+#else
+  return Divisor;
+#endif
+}
+
+Ref OpDispatchBuilder::KeepIfDivisorZero(Ref Divisor, IR::OpSize CompareSize, Ref Old, Ref New) {
+#ifdef _WIN32
+  // x86 changes no register when it raises #DE.
+  return _Select(GetGPROpSize(), CompareSize, CondClass::EQ, Divisor, Constant(0), Old, New);
+#else
+  return New;
+#endif
+}
+
+void OpDispatchBuilder::RaiseDivideErrorIfZero(OpcodeArgs, Ref Divisor, IR::OpSize CompareSize) {
 #ifdef _WIN32
   // x86 raises a divide error (#DE) when the divisor is zero, while ARM64's division returns zero.
-  // Branch to a block at the end that raises it at this instruction, which the Windows frontends
-  // turn into EXCEPTION_INT_DIVIDE_BY_ZERO, and go on in a block right after this one.
-  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
+  // DIVOp and IDIVOp read the divisor once, as x86 does, and this tests that value: it branches to a
+  // block at the end that raises #DE at this instruction, which the Windows frontends turn into
+  // EXCEPTION_INT_DIVIDE_BY_ZERO, and goes on in a block right after this one.
   CalculateDeferredFlags();
-  auto CondJump_ =
-    CondJump(Divisor, Constant(0), InvalidNode, InvalidNode, CondClass::EQ, Size == OpSize::i64Bit ? OpSize::i64Bit : OpSize::i32Bit);
+  auto CondJump_ = CondJump(Divisor, Constant(0), InvalidNode, InvalidNode, CondClass::EQ, CompareSize);
 
   auto ContinueBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
   SetFalseJumpTarget(CondJump_, ContinueBlock);

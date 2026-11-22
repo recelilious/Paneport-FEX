@@ -895,7 +895,9 @@ public:
   void Insertq(OpcodeArgs);
 
   void BreakOp(OpcodeArgs, FEXCore::IR::BreakDefinition BreakDefinition);
-  void RaiseDivideErrorIfZero(OpcodeArgs, IR::OpSize Size);
+  Ref DivisorOrOne(Ref Divisor, IR::OpSize CompareSize);
+  Ref KeepIfDivisorZero(Ref Divisor, IR::OpSize CompareSize, Ref Old, Ref New);
+  void RaiseDivideErrorIfZero(OpcodeArgs, Ref Divisor, IR::OpSize CompareSize);
   void UnimplementedOp(OpcodeArgs);
   void PermissionRestrictedOp(OpcodeArgs);
 
