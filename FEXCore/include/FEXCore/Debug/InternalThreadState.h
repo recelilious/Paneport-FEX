@@ -116,9 +116,6 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
 
   uintptr_t JITGuardPage {};
   uint64_t JITGuardOverflowArgument {};
-
-  // The JITWriteScopes open on this thread that count themselves here, see JITWriteScope.
-  uint32_t JITWriteScopeDepth {};
   FEXCore::UncheckedLongJump::JumpBuf RestartJump;
 
   // BaseFrameState should always be at the end, directly before the interrupt fault page
@@ -126,6 +123,12 @@ struct alignas(FEXCore::Utils::FEX_PAGE_SIZE) InternalThreadState : public FEXCo
 
   // Can be reprotected as RO to trigger an interrupt at generated code block entrypoints
   alignas(FEXCore::Utils::FEX_PAGE_SIZE) uint8_t InterruptFaultPage[FEXCore::Utils::FEX_PAGE_SIZE];
+
+#ifdef _WIN32
+  // The JITWriteScopes open on this thread that count themselves here, see JITWriteScope. It comes after
+  // everything else, so that no offset that generated code uses moves.
+  uint32_t JITWriteScopeDepth {};
+#endif
 };
 static_assert(std::is_standard_layout_v<FEXCore::Core::InternalThreadState>);
 // Maximum unsigned-offset store range for fault page.
