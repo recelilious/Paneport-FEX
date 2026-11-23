@@ -73,12 +73,12 @@ ExitFunctionSuspendResumePoint:
   mov x17, x9
   mov w16, #0x200
   movk w16, #0xd63f, lsl 16 // blr x16
-  ldursw x23, [x17, #-0x4] // Load either the entry thunk offset or the calling instruction.
-  cmp w23, w16
+  ldursw x5, [x17, #-0x4] // Load either the entry thunk offset or the calling instruction.
+  cmp w5, w16
   beq ret_sp_aligned
 
-  and x23, x23, #-0x4
-  add x17, x17, x23 // Resolve entry thunk address.
+  and x5, x5, #-0x4
+  add x17, x17, x5 // Resolve entry thunk address.
 
   mov x4, sp
   tbz x4, #3, ret_sp_misaligned
