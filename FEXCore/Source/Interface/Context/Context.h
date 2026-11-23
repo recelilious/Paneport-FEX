@@ -248,6 +248,15 @@ public:
   }
 
   void MarkMonoBackpatcherBlock(uint64_t BlockEntry) override;
+
+  void SetSharedUserDataAddress(uint64_t Address) override {
+    SharedUserDataAddress = Address;
+  }
+
+  // Where the shared user data really is, or 0 when guest accesses to it need no redirection.
+  uint64_t GetSharedUserDataAddress() const {
+    return SharedUserDataAddress;
+  }
   std::atomic<uint64_t>& GetMonoBackPatcherBlock() {
     return MonoBackpatcherBlock;
   }
@@ -514,6 +523,8 @@ private:
 
   bool MonoDetected = false;
   std::atomic<uint64_t> MonoBackpatcherBlock;
+
+  uint64_t SharedUserDataAddress {};
 
   std::mutex CodeBufferListLock;
   fextl::vector<std::weak_ptr<CPU::CodeBuffer>> CodeBufferList;

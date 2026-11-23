@@ -4447,6 +4447,34 @@ AddressMode OpDispatchBuilder::DecodeAddress(const X86Tables::DecodedOp& Op, con
 }
 
 
+void OpDispatchBuilder::RedirectSharedUserDataLoad(AddressMode& A, IR::OpSize Size) {
+  // Wine on Apple silicon maps the shared user data where the kernel chooses, because its fixed address lies in the
+  // executable's page zero. A load from a constant address in the page reads it where it is. Stores keep their address
+  // and fault, as on Windows, where the page is read-only, and so do loads through registers, which the frontend
+  // emulates. The page's address belongs to one process, so code that must stay relocatable keeps the fixed address and
+  // takes the frontend's path as well.
+  const uint64_t Redirected = CTX->GetSharedUserDataAddress();
+  if (Redirected == 0 || A.Base || A.Index || A.Segment || CTX->RequiresRelocatableConstants()) {
+    return;
+  }
+
+  uint64_t Address = static_cast<uint64_t>(A.Offset);
+  if (A.AddrSize == OpSize::i32Bit) {
+    Address &= 0xFFFF'FFFFULL;
+  }
+
+  constexpr uint64_t Begin = FEXCore::Context::SharedUserDataFixedAddress;
+  constexpr uint64_t End = Begin + FEXCore::Context::SharedUserDataSize;
+  const uint64_t Bytes = OpSizeToSize(Size);
+  if (Address < Begin || Address >= End || Bytes > End - Address) {
+    return;
+  }
+
+  A.Base = Constant(Redirected + (Address - Begin));
+  A.Offset = 0;
+  A.AddrSize = OpSize::i64Bit;
+}
+
 Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::DecodedOp& Op, const X86Tables::DecodedOperand& Operand,
                                              IR::OpSize OpSize, uint32_t Flags, const LoadSourceOptions& Options) {
   auto [Align, LoadData, ForceLoad, AccessType, AllowUpperGarbage] = Options;
@@ -4494,6 +4522,7 @@ Ref OpDispatchBuilder::LoadSource_WithOpSize(RegClass Class, const X86Tables::De
         Result = _VLoadVectorElement(OpSize::i128Bit, OpSize::i16Bit, Res, 4, Add(OpSize::i64Bit, MemSrc, 8));
       }
     } else {
+      RedirectSharedUserDataLoad(A, OpSize);
       Result = _LoadMemAutoTSO(Class, OpSize, A, Align == OpSize::iInvalid ? OpSize : Align);
     }
   } else {

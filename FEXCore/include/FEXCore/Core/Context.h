@@ -35,6 +35,10 @@ class IREmitter;
 
 namespace FEXCore::Context {
 
+// The page that Windows maps read-only at a fixed address in every process, the shared user data (KUSER_SHARED_DATA).
+constexpr uint64_t SharedUserDataFixedAddress = 0x7ffe0000;
+constexpr uint64_t SharedUserDataSize = 0x1000;
+
 enum OperatingMode {
   MODE_32BIT,
   MODE_64BIT,
@@ -195,6 +199,17 @@ public:
   FEX_DEFAULT_VISIBILITY virtual void MarkMonoDetected() = 0;
 
   FEX_DEFAULT_VISIBILITY virtual void MarkMonoBackpatcherBlock(uint64_t BlockEntry) = 0;
+
+  /**
+   * @brief Tells the JIT where the shared user data really is, when the host could not map it at its fixed address.
+   *
+   * Wine on Apple silicon maps the page where the kernel chooses, because the low 4 GB of every process are the
+   * executable's page zero there. Guest loads from a constant address in the page then read it at Address instead.
+   * 0, the default, leaves every access as it is. A frontend sets it before any guest code compiles.
+   *
+   * @param Address Where the page is, or 0.
+   */
+  FEX_DEFAULT_VISIBILITY virtual void SetSharedUserDataAddress(uint64_t Address) = 0;
 private:
 };
 } // namespace FEXCore::Context
