@@ -49,6 +49,7 @@ $end_info$
 #include "DummyHandlers.h"
 #include "BTInterface.h"
 #include "Windows/Common/SHMStats.h"
+#include "Windows/Common/SharedUserData.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -150,6 +151,9 @@ std::optional<FEX::Windows::InvalidationTracker> InvalidationTracker;
 std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
 std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
 std::optional<FEX::Windows::ImageTracker> ImageTracker;
+
+// Where Wine maps the shared user data when it cannot map it at its fixed address, or 0.
+uint64_t SharedUserDataAddress {};
 
 std::recursive_mutex ThreadCreationMutex;
 // Map of TIDs to their FEX thread state, `ThreadCreationMutex` must be locked when accessing
@@ -680,6 +684,16 @@ NTSTATUS ProcessInit() {
 
   CTX->SetSignalDelegator(SignalDelegator.get());
   CTX->SetSyscallHandler(SyscallHandler.get());
+
+  // Wine on Apple silicon maps the shared user data where the kernel chooses, because the executable's page zero covers
+  // its fixed address, and exports where it is. Guest reads of the page at its fixed address are redirected there.
+  if (const auto GetUserSharedData = reinterpret_cast<void* (*)()>(GetProcAddress(NtDll, "__wine_get_user_shared_data"))) {
+    const auto Address = reinterpret_cast<uint64_t>(GetUserSharedData());
+    if (Address != FEXCore::Context::SharedUserDataFixedAddress) {
+      SharedUserDataAddress = Address;
+      CTX->SetSharedUserDataAddress(Address);
+    }
+  }
   CTX->InitCore();
   Exception::HandlerConfig.emplace(*CTX);
   InvalidationTracker.emplace(*CTX, Threads);
@@ -759,6 +773,18 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
     if (FEX::Windows::JITGuardPage::HandleJITGuardPage(Thread, reinterpret_cast<void*>(FaultAddress), NativeContext->X,
                                                        reinterpret_cast<__uint128_t*>(NativeContext->V), &NativeContext->Pc)) {
       return true;
+    }
+
+    if (SharedUserDataAddress != 0 && CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc)) {
+      const auto Kind = FEX::Windows::SharedUserData::HandleAccessViolation(
+        SharedUserDataAddress, FaultAddress, NativeContext->X, reinterpret_cast<__uint128_t*>(NativeContext->V), NativeContext->Pc);
+      if (Kind == FEX::Windows::SharedUserData::AccessKind::Emulated) {
+        return true;
+      }
+      if (Kind == FEX::Windows::SharedUserData::AccessKind::Write) {
+        // Windows reports a write to the read-only page, and so must the exception that the guest gets.
+        Exception->ExceptionInformation[0] = EXCEPTION_WRITE_FAULT;
+      }
     }
 
     std::scoped_lock Lock(ThreadCreationMutex);

@@ -15,6 +15,7 @@ add_library(CommonWindows STATIC
   InvalidationTracker.cpp
   ImageTracker.cpp
   Logging.cpp
+  SharedUserData.cpp
   Threads.cpp)
 
 target_link_libraries(CommonWindows FEXCore_Base)
