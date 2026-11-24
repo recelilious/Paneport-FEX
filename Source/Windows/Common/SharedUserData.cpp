@@ -37,8 +37,9 @@ namespace {
     // A general-purpose load that sign-extends its value, to 64 bits or to 32 bits.
     bool SignExtend {};
     bool SignExtendTo64 {};
-    // An ASIMD load of one lane, or of one element into every lane. Q selects all 128 bits; without it, the upper 64 bits
-    // of the register become zero.
+    // An ASIMD load of one lane, or of one element into every lane. A load of one lane writes only that lane and keeps the
+    // rest of the register, whatever Q is, because Q is the top bit of the lane index. Only LD1R reads Q as a width: all 128
+    // bits, or the lower 64 bits with the upper 64 bits zero.
     bool Lane {};
     uint32_t LaneIndex {};
     bool Replicate {};
@@ -138,10 +139,10 @@ namespace {
       const uint32_t Rm = (Instr >> 16) & 0x1F;
       uint64_t Offset = Rm == ZeroRegister ? 0 : GPRs[Rm];
       switch ((Instr >> 13) & 0b111) {
-      case 0b010: Offset = static_cast<uint32_t>(Offset); break;                                         // UXTW
-      case 0b011: break;                                                                                 // LSL
+      case 0b010: Offset = static_cast<uint32_t>(Offset); break;                                             // UXTW
+      case 0b011: break;                                                                                     // LSL
       case 0b110: Offset = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(Offset))); break; // SXTW
-      case 0b111: break;                                                                                 // SXTX
+      case 0b111: break;                                                                                     // SXTX
       default: return std::nullopt;
       }
       if ((Instr >> 12) & 1) {
@@ -363,9 +364,6 @@ namespace {
         if (L.Lane) {
           memcpy(Vector, &FPRs[Register], sizeof(Vector));
           memcpy(Vector + (L.LaneIndex * L.Size), Value, L.Size);
-          if (!L.Q) {
-            memset(Vector + 8, 0, 8);
-          }
         } else if (L.Replicate) {
           const uint32_t Bytes = L.Q ? 16 : 8;
           for (uint32_t Offset = 0; Offset < Bytes; Offset += L.Size) {
