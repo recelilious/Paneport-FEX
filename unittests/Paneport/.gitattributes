@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 recelilious and the Paneport contributors
+
+# sh stops at a carriage return, so the scripts here keep LF line endings in every checkout, whatever core.autocrlf says.
+*.sh text eol=lf

@@ -102,11 +102,12 @@ void LoadSigned(const char* Instruction, uint32_t Word, uint64_t Expected) {
   Check(S.GPRs[1] == Expected, Instruction, "the sign-extended value");
 }
 
-// A load of a whole B, H, S, D or Q register from x2, which sets the rest of the register to zero.
-void LoadVector(const char* Instruction, uint32_t Word, uint64_t Base, uint64_t Offset, uint32_t Size) {
+// A load of a whole B, H, S, D or Q register from x2 and maybe x3, which sets the rest of the register to zero.
+void LoadVector(const char* Instruction, uint32_t Word, uint64_t Base, uint64_t Offset, uint32_t Size, uint64_t Index = 0) {
   State S;
   S.FPRs[0] = AllOnes;
   S.GPRs[2] = Fixed + Base;
+  S.GPRs[3] = Index;
   Check(S.Run(Word, Offset) == AccessKind::Emulated && S.Advanced(), Instruction, "emulated, and the PC moves on");
   Check(S.FPRs[0] == PageVector(Offset, Size), Instruction, "the value, with the rest of the register zero");
 }
@@ -179,6 +180,10 @@ int main() {
   LoadGPR("ldr w1, [x2, x3, lsl #2]", 0xb8637841, 0x200, 0x1b, 0x26c, 4);
   LoadGPR("ldr w1, [x2, w3, uxtw]", 0xb8634841, 0x200, 0xffffffff0000006cULL, 0x26c, 4);
   LoadGPR("ldr w1, [x2, w3, sxtw #2]", 0xb863d841, 0x300, static_cast<uint32_t>(-0x25), 0x26c, 4);
+  // SXTX is the extension that FEX writes for the index of a guest load. An index of 2^32 is not the extension of its low
+  // 32 bits, so SXTX, SXTW and UXTW give different addresses.
+  LoadGPR("ldr w1, [x2, x3, sxtx]", 0xb863e841, 0x26c - 0x100000000ULL, 0x100000000ULL, 0x26c, 4);
+  LoadGPR("ldr w1, [x2, x3, sxtx #2]", 0xb863f841, 0x300, static_cast<uint64_t>(-0x25LL), 0x26c, 4);
   LoadGPR("ldapr w1, [x2]", 0xb8bfc041, 0x26c, 0, 0x26c, 4);
   LoadGPR("ldar x1, [x2]", 0xc8dffc41, 0x268, 0, 0x268, 8);
   LoadGPR("ldarb w1, [x2]", 0x08dffc41, 0x268, 0, 0x268, 1);
@@ -202,6 +207,9 @@ int main() {
   // The offset of a Q register load is scaled by 16, not by its size field.
   LoadVector("ldr q0, [x2, #16]", 0x3dc00440, 0x250, 0x260, 16);
   LoadVector("ldur q0, [x2, #-16]", 0x3cdf0040, 0x270, 0x260, 16);
+  // A register offset with SXTX, scaled or not, as FEX writes it for a vector load through a base and an index.
+  LoadVector("ldr q0, [x2, x3, sxtx]", 0x3ce3e840, 0x260 - 0x100000000ULL, 0x260, 16, 0x100000000ULL);
+  LoadVector("ldr d0, [x2, x3, sxtx #3]", 0xfc63f840, 0x300, 0x268, 8, static_cast<uint64_t>(-0x13LL));
 
   // Writeback of the base register.
   {
