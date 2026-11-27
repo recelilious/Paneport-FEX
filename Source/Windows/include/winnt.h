@@ -3,10 +3,30 @@
 
 #pragma once
 
+// Paneport: the toolchain's NtCurrentTeb reads x18, which the kernel of Apple systems zeroes on
+// every return to user mode in an iOS app, and in a macOS program linked with the macOS 13 SDK
+// or a later one. The toolchain's definition is renamed out of the way here, and the one below
+// takes the TEB from where Paneport's Wine keeps it: slot 6 (offset 0x30) of the thread's TSD,
+// whose address TPIDRRO_EL0 holds. The low three bits are cleared, because the kernel has kept
+// the CPU number there. The assembly of ARM64EC/Module.S and the generated code of FEXCore
+// (Arm64Emitter::LoadTEB) use the same sequence.
+#if defined(__aarch64__) || defined(__arm64ec__)
+#define NtCurrentTeb __toolchain_NtCurrentTeb
+#endif
+
 #include_next <winnt.h>
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#if defined(__aarch64__) || defined(__arm64ec__)
+#undef NtCurrentTeb
+static __inline__ __attribute__((__always_inline__)) struct _TEB* NtCurrentTeb(void) {
+  ULONG_PTR Tsd;
+  __asm__("mrs %0, tpidrro_el0" : "=r"(Tsd));
+  return *(struct _TEB**)((Tsd & ~(ULONG_PTR)7) + 0x30);
+}
 #endif
 
 typedef struct ___IMAGE_LOAD_CONFIG_CODE_INTEGRITY {

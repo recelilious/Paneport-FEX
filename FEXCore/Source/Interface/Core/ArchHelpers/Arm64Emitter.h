@@ -79,6 +79,9 @@ constexpr auto EC_ENTRY_CPUAREA_REG = ARMEmitter::XReg::x17;
 constexpr auto SVE_OPT_PRED = ARMEmitter::PReg::p2;
 
 // These structures are not included in the standard Windows headers, define the offsets of members we care about for EC here.
+// Paneport: slot 6 of the thread's TSD on Apple systems, where Paneport's Wine keeps the TEB
+// pointer, since the kernel zeroes x18 (Source/Windows/include/winnt.h).
+constexpr size_t TSD_TEB_OFFSET = 0x30;
 constexpr size_t TEB_CPU_AREA_OFFSET = 0x1788;
 constexpr size_t TEB_PEB_OFFSET = 0x60;
 constexpr size_t PEB_EC_CODE_BITMAP_OFFSET = 0x368;
@@ -118,6 +121,12 @@ public:
     AUTOPAD,
   };
   void LoadConstant(ARMEmitter::Size s, ARMEmitter::Register Reg, uint64_t Constant, PadType Pad = PadType::NOPAD, int MaxBytes = 0);
+
+#ifdef ARCHITECTURE_arm64ec
+  // Paneport: loads the calling thread's TEB into Reg from the thread's TSD and clobbers nothing
+  // else. For code that does not hold STATE; code that does loads CpuStateFrame::HostTEB.
+  void LoadTEB(ARMEmitter::XRegister Reg);
+#endif
 
 protected:
   FEXCore::Context::ContextImpl* EmitterCTX;

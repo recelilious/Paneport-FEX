@@ -1063,6 +1063,8 @@ NTSTATUS ThreadInit() {
   Frame->State.cs_cached = FEXCore::Core::CPUState::CalculateGDTBase(GDT);
 
   FEX::Windows::CallRetStack::InitializeThread(Thread);
+  // Paneport: generated code takes the TEB from the thread's state, not from x18.
+  Thread->CurrentFrame->HostTEB = reinterpret_cast<uint64_t>(NtCurrentTeb());
   Thread->CurrentFrame->Pointers.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
   CPUArea.StateFrame() = Thread->CurrentFrame;
 

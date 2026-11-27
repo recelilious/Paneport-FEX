@@ -431,6 +431,11 @@ struct CpuStateFrame {
   InternalThreadState* Thread;
 
 #ifdef _WIN32
+  // Paneport: the thread's TEB, which the frontend sets when it creates the thread. Generated
+  // code that holds STATE loads the TEB from here, because the kernel of Apple systems zeroes
+  // x18, where Windows keeps it.
+  uint64_t HostTEB {};
+
   // Set by the kernel on ARM64EC whenever the JIT should cooperatively suspend running guest code.
   uint32_t SuspendDoorbell {};
 #endif

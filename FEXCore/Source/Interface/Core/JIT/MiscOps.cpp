@@ -366,7 +366,8 @@ DEF_OP(MonoBackpatcherWrite) {
   }
 
 #ifdef ARCHITECTURE_arm64ec
-  ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
+  ldr(TMP2, STATE, offsetof(FEXCore::Core::CpuStateFrame, HostTEB));
+  ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
   LoadConstant(ARMEmitter::Size::i32Bit, TMP1, 1);
   strb(TMP1.W(), TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
 #endif
@@ -379,7 +380,9 @@ DEF_OP(MonoBackpatcherWrite) {
   }
 
 #ifdef ARCHITECTURE_arm64ec
-  ldr(TMP2, ARMEmitter::XReg::x18, TEB_CPU_AREA_OFFSET);
+  // The callee is native code, which need not keep STATE, so the TEB comes from the TSD.
+  LoadTEB(TMP2);
+  ldr(TMP2, TMP2, TEB_CPU_AREA_OFFSET);
   strb(ARMEmitter::WReg::zr, TMP2, CPU_AREA_IN_SYSCALL_CALLBACK_OFFSET);
 #endif
 

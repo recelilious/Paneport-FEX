@@ -176,6 +176,23 @@ namespace x64 {
   constexpr std::array<ARMEmitter::VRegister, 0> PreserveAll_DynamicFPR = {
     // None
   };
+
+  // Paneport: x18 holds nothing on Apple systems, whose kernel zeroes it on every return to user
+  // mode, so no register set of the ARM64EC JIT may name it.
+  template<size_t N>
+  constexpr bool HoldsX18(const std::array<ARMEmitter::Register, N>& Regs) {
+    for (auto Reg : Regs) {
+      if (Reg.Idx() == 18) {
+        return true;
+      }
+    }
+    return false;
+  }
+  static_assert(!HoldsX18(SRA) && !HoldsX18(PreserveAll_SRA) && !HoldsX18(RA) && !HoldsX18(PreserveAll_Dynamic) && !HoldsX18(NotPreserved_Dynamic),
+                "The ARM64EC JIT must not use x18");
+  static_assert(TMP1.Idx() != 18 && TMP2.Idx() != 18 && TMP3.Idx() != 18 && TMP4.Idx() != 18 && STATE.Idx() != 18 && REG_PF.Idx() != 18 &&
+                  REG_AF.Idx() != 18 && REG_CALLRET_SP.Idx() != 18,
+                "The ARM64EC JIT must not use x18");
 #endif
 
   constexpr uint32_t PreserveAll_SRAMask = {[]() -> uint32_t {
@@ -778,6 +795,14 @@ void Arm64Emitter::SpillStaticRegs(ARMEmitter::Register TmpReg, SpillStaticRegOp
   }
 }
 
+#ifdef ARCHITECTURE_arm64ec
+void Arm64Emitter::LoadTEB(ARMEmitter::XRegister Reg) {
+  mrs(Reg.R(), ARMEmitter::SystemRegister::TPIDRRO_EL0);
+  and_(ARMEmitter::Size::i64Bit, Reg.R(), Reg.R(), ~0x7ULL);
+  ldr(Reg, Reg.R(), TSD_TEB_OFFSET);
+}
+#endif
+
 void Arm64Emitter::FillStaticRegs(FillStaticRegOptions Options) {
   auto FindTempReg = [this](uint32_t* GPRFillMask) -> std::optional<ARMEmitter::Register> {
     for (auto Reg : StaticRegisters) {
@@ -807,7 +832,8 @@ void Arm64Emitter::FillStaticRegs(FillStaticRegOptions Options) {
 
 #ifdef ARCHITECTURE_arm64ec
   // Load STATE in from the CPU area as x28 is not callee saved in the ARM64EC ABI.
-  ldr(TmpReg.X(), ARMEmitter::Reg::r18, TEB_CPU_AREA_OFFSET);
+  LoadTEB(TmpReg.X());
+  ldr(TmpReg.X(), TmpReg, TEB_CPU_AREA_OFFSET);
   ldr(STATE, TmpReg, CPU_AREA_EMULATOR_DATA_OFFSET);
 #endif
 
