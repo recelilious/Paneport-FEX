@@ -341,6 +341,13 @@ endif()
 if (ENABLE_FEX_ALLOCATOR)
   # The rpmalloc subproject that all FEXCore fextl objects allocate through.
   add_subdirectory(External/rpmalloc/)
+  if (MINGW)
+    # Paneport: rpmalloc names a thread by NtCurrentTeb, and the toolchain's definition reads
+    # x18, which the kernel of Apple systems zeroes, so two threads could take each other for
+    # the owner of a heap. The frontend's winnt.h comes first here too, whose NtCurrentTeb
+    # takes the TEB from the thread's TSD.
+    target_include_directories(rpmalloc BEFORE PRIVATE "${CMAKE_SOURCE_DIR}/Source/Windows/include/")
+  endif()
 elseif (NOT MINGW)
   message (STATUS
     " FEX allocator is disabled!\n"
