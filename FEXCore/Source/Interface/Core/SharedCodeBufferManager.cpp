@@ -9,17 +9,61 @@
 
 #ifndef _WIN32
 #include <FEXCore/Utils/PrctlUtils.h>
+#else
+#include <synchapi.h>
 #endif
+
+#include <algorithm>
+#include <atomic>
 
 namespace FEXCore::CPU {
 static constexpr size_t INITIAL_CODE_SIZE = 1024 * 1024 * 16;
 // We don't want to move above 128MB atm because that means we will have to encode longer jumps
 static constexpr size_t MAX_CODE_SIZE = 1024 * 1024 * 128;
+// The smallest cap: a buffer must hold the largest block and its guard region.
+static constexpr size_t MIN_CODE_SIZE = 1024 * 1024;
+
+// How many code buffers are alive, and their bytes, for the report of a failed allocation.
+static std::atomic<size_t> LiveCodeBuffers {};
+static std::atomic<size_t> LiveCodeBufferBytes {};
+
+// The largest code buffer. A host that holds generated code in a pool of a fixed size, see
+// FEXCore::Allocator::JITCodeLimit, caps it at the largest power of two that is at most half the
+// limit, because a full buffer and its successor are alive together until every thread has let
+// go of the old one. The MaxCodeBufferSize option caps it further.
+static size_t MaxCodeSize() {
+  size_t Max = MAX_CODE_SIZE;
+  if (const size_t Limit = FEXCore::Allocator::JITCodeLimit) {
+    while (Max > Limit / 2 && Max > MIN_CODE_SIZE) {
+      Max /= 2;
+    }
+  }
+  if (const size_t Configured = FEXCore::Config::Get_MAXCODEBUFFERSIZE()) {
+    Max = std::min<size_t>(Max, FEXCore::AlignUp(Configured * 1024, 64 * 1024));
+  }
+  return std::max<size_t>(Max, MIN_CODE_SIZE);
+}
 
 CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
   : AllocatedSize(Size) {
   Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
+#ifdef _WIN32
+  // A host with a pool of a fixed size has no room while other threads still hold older buffers, which they
+  // let go when they next compile a block. Wait for that for two seconds, then give up with the numbers.
+  for (int Attempt = 0; !Ptr && FEXCore::Allocator::JITCodeLimit && Attempt < 200; ++Attempt) {
+    ::Sleep(10);
+    Ptr = static_cast<uint8_t*>(FEXCore::Allocator::VirtualAlloc(Size, true));
+  }
+  if (!Ptr) {
+    ERROR_AND_DIE_FMT("Couldn't allocate a code buffer of {} bytes: {} code buffers with {} bytes are alive, and the host holds at most {} "
+                      "bytes of generated code (0: no limit)",
+                      Size, LiveCodeBuffers.load(), LiveCodeBufferBytes.load(), FEXCore::Allocator::JITCodeLimit);
+  }
+#else
   LOGMAN_THROW_A_FMT(!!Ptr, "Couldn't allocate code buffer");
+#endif
+  LiveCodeBuffers.fetch_add(1);
+  LiveCodeBufferBytes.fetch_add(Size);
 
   // Protect the guard region at the end of the allocated buffer to trigger SIGSEGV on write access
   uintptr_t LastPageAddr = AlignDown(reinterpret_cast<uintptr_t>(Ptr) + Size - 1, FEXCore::Utils::FEX_GUARD_SIZE);
@@ -42,6 +86,8 @@ CodeBuffer::CodeBuffer(size_t Size, bool ShouldBeNamed)
 }
 
 CodeBuffer::~CodeBuffer() {
+  LiveCodeBuffers.fetch_sub(1);
+  LiveCodeBufferBytes.fetch_sub(AllocatedSize);
   FEXCore::Allocator::VirtualFree(Ptr, AllocatedSize);
 }
 
@@ -90,7 +136,7 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::AllocateNew(size_t Size) 
 
 fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::GetLatest() {
   if (!Latest) {
-    AllocateNew(INITIAL_CODE_SIZE);
+    AllocateNew(std::min<size_t>(INITIAL_CODE_SIZE, MaxCodeSize()));
   }
   return Latest;
 }
@@ -102,11 +148,11 @@ fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::StartLargerCodeBuffer() {
   }
 
   auto NewCodeBufferSize = GetLatest()->TotalAllocationSize();
-  NewCodeBufferSize = std::min<size_t>(NewCodeBufferSize * 2, MAX_CODE_SIZE);
+  NewCodeBufferSize = std::min<size_t>(NewCodeBufferSize * 2, MaxCodeSize());
   return AllocateNew(NewCodeBufferSize);
 }
 
 fextl::shared_ptr<CodeBuffer> SharedCodeBufferManager::StartMaximalCodeBuffer() {
-  return AllocateNew(MAX_CODE_SIZE);
+  return AllocateNew(MaxCodeSize());
 }
 } // namespace FEXCore::CPU

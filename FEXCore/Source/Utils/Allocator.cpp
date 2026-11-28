@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <charconv>
@@ -331,4 +332,96 @@ void SetupHooks(size_t PageSize, HookPtrs Ptrs) {
 #endif
 
 JITWriteProtectPtr JITWriteProtect {};
+JITWriteAddressPtr JITGetWriteAddress {};
+bool JITDualMapped {};
+size_t JITCodeLimit {};
+
+namespace {
+// One executable allocation that the host maps twice. End is 0 for a free slot.
+struct JITAllocation {
+  std::atomic<uintptr_t> Begin;
+  std::atomic<uintptr_t> End;
+  std::atomic<ptrdiff_t> Delta;
+};
+
+// The dispatcher, the code buffers and the code caches: a handful at a time.
+constexpr size_t MAX_JIT_ALLOCATIONS = 256;
+JITAllocation JITAllocations[MAX_JIT_ALLOCATIONS];
+
+// Writers take the lock and make the version odd while they change the table. A reader that saw
+// an odd version, or another version after its scan than before, scans again.
+std::atomic<uint32_t> JITAllocationsVersion {};
+std::atomic_flag JITAllocationsLock = ATOMIC_FLAG_INIT;
+
+struct JITAllocationsWriter {
+  JITAllocationsWriter() {
+    while (JITAllocationsLock.test_and_set(std::memory_order_acquire)) {}
+    JITAllocationsVersion.fetch_add(1, std::memory_order_acq_rel);
+  }
+  ~JITAllocationsWriter() {
+    JITAllocationsVersion.fetch_add(1, std::memory_order_acq_rel);
+    JITAllocationsLock.clear(std::memory_order_release);
+  }
+};
+} // namespace
+
+void JITRegisterAllocation(void* Exec, size_t Size) {
+  void* Write = JITGetWriteAddress ? JITGetWriteAddress(Exec, Size) : nullptr;
+  if (!Write || Write == Exec) {
+    return;
+  }
+
+  bool Stored = false;
+  {
+    JITAllocationsWriter Writer;
+    for (auto& Allocation : JITAllocations) {
+      if (Allocation.End.load(std::memory_order_relaxed) == 0) {
+        Allocation.Begin.store(reinterpret_cast<uintptr_t>(Exec), std::memory_order_relaxed);
+        Allocation.Delta.store(static_cast<ptrdiff_t>(reinterpret_cast<uintptr_t>(Write) - reinterpret_cast<uintptr_t>(Exec)),
+                               std::memory_order_relaxed);
+        Allocation.End.store(reinterpret_cast<uintptr_t>(Exec) + Size, std::memory_order_relaxed);
+        Stored = true;
+        break;
+      }
+    }
+  }
+  if (!Stored) {
+    ERROR_AND_DIE_FMT("More than {} executable allocations are alive; the one at {} has no place in the table of write addresses",
+                      MAX_JIT_ALLOCATIONS, fmt::ptr(Exec));
+  }
+}
+
+void JITUnregisterAllocation(void* Exec) {
+  const auto Begin = reinterpret_cast<uintptr_t>(Exec);
+  JITAllocationsWriter Writer;
+  for (auto& Allocation : JITAllocations) {
+    if (Allocation.End.load(std::memory_order_relaxed) != 0 && Allocation.Begin.load(std::memory_order_relaxed) == Begin) {
+      Allocation.End.store(0, std::memory_order_relaxed);
+      break;
+    }
+  }
+}
+
+ptrdiff_t JITFindWriteDelta(const void* Exec) {
+  const auto Address = reinterpret_cast<uintptr_t>(Exec);
+  for (;;) {
+    const uint32_t Version = JITAllocationsVersion.load(std::memory_order_acquire);
+    if (Version & 1) {
+      continue;
+    }
+    ptrdiff_t Delta = 0;
+    for (const auto& Allocation : JITAllocations) {
+      // A writer may be changing the slot; the version check below discards such a scan.
+      const uintptr_t End = Allocation.End.load(std::memory_order_relaxed);
+      const uintptr_t Begin = Allocation.Begin.load(std::memory_order_relaxed);
+      if (Address >= Begin && Address < End) {
+        Delta = Allocation.Delta.load(std::memory_order_relaxed);
+        break;
+      }
+    }
+    if (JITAllocationsVersion.load(std::memory_order_acquire) == Version) {
+      return Delta;
+    }
+  }
+}
 } // namespace FEXCore::Allocator

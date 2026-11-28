@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "Interface/Core/ArchHelpers/Arm64Emitter.h"
+#include <FEXCore/Utils/AllocatorHooks.h>
 #include "Interface/Core/Dispatcher/Dispatcher.h"
 #include "Interface/Context/Context.h"
 
@@ -382,6 +383,10 @@ Arm64Emitter::Arm64Emitter(FEXCore::Context::ContextImpl* ctx, void* EmissionPtr
   , Simulator {&SimDecoder, stdout, vixl::aarch64::SimStack(SimulatorStackSize).Allocate()}
 #endif
 {
+  // A buffer of generated code may be writable at other addresses than its own, see JITGetWriteAddress.
+  if (EmissionPtr) {
+    SetWriteDelta(FEXCore::Allocator::JITWriteDelta(EmissionPtr));
+  }
 #ifdef VIXL_SIMULATOR
   FEX_CONFIG_OPT(ForceSVEWidth, FORCESVEWIDTH);
   // Hardcode a 256-bit vector width if we are running in the simulator.

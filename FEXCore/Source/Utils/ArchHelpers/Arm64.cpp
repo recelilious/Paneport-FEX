@@ -2121,7 +2121,10 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
 #else
   FEXCore::Allocator::JITWriteScope WriteScope;
 #endif
-  FEXCore::Utils::SpinWaitLock::UniqueSpinMutex lk(&InlineTail->SpinLockFutex);
+  // The instructions and the lock word are read at their execute addresses and written through their write
+  // addresses, which are the same unless the host maps generated code twice.
+  uint32_t* const WritePC = WriteScope.WriteAddress(PC);
+  FEXCore::Utils::SpinWaitLock::UniqueSpinMutex lk(WriteScope.WriteAddress(&InlineTail->SpinLockFutex));
 
   if ((Instr & LDAXR_MASK) == LDAR_INST ||  // LDAR*
       (Instr & LDAXR_MASK) == LDAPR_INST) { // LDAPR*
@@ -2131,9 +2134,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     LDR |= DataReg;
     if (HandleType != UnalignedHandlerType::NonAtomic) {
       // Ordering matters with cross-thread visibility!
-      std::atomic_ref<uint32_t>(PC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(WritePC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(LDR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(WritePC[0]).store(LDR, std::memory_order_release);
     ClearICache(&PC[0], 8);
     // With the instruction modified, now execute again.
     return 0;
@@ -2143,9 +2146,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     STR |= AddrReg << 5;
     STR |= DataReg;
     if (HandleType != UnalignedHandlerType::NonAtomic) {
-      std::atomic_ref<uint32_t>(PC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(WritePC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(STR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(WritePC[0]).store(STR, std::memory_order_release);
     ClearICache(&PC[-1], 8);
     // Back up one instruction and have another go
     return -4;
@@ -2158,9 +2161,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     LDUR |= Instr & (0b1'1111'1111 << 12);
     if (HandleType != UnalignedHandlerType::NonAtomic) {
       // Ordering matters with cross-thread visibility!
-      std::atomic_ref<uint32_t>(PC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(WritePC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(LDUR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(WritePC[0]).store(LDUR, std::memory_order_release);
     ClearICache(&PC[0], 8);
     // With the instruction modified, now execute again.
     return 0;
@@ -2171,9 +2174,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     STUR |= DataReg;
     STUR |= Instr & (0b1'1111'1111 << 12);
     if (HandleType != UnalignedHandlerType::NonAtomic) {
-      std::atomic_ref<uint32_t>(PC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(WritePC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(STUR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(WritePC[0]).store(STUR, std::memory_order_release);
 
     ClearICache(&PC[-1], 8);
     // Back up one instruction and have another go

@@ -19,6 +19,43 @@
 #include <sys/types.h>
 
 namespace FEXCore::Allocator {
+// Some hosts map the memory that holds generated code twice, executable at the address that
+// VirtualAlloc(..., true) returns and writable at another, and never let one mapping have both
+// permissions: Paneport on iOS, whose executable memory is a pool that a debugger prepared. The
+// frontend for such a host installs this hook, which returns the address at which a range of an
+// executable allocation is writable, or nullptr for memory that is written where it lies.
+//
+// Generated code is then written through its write address and runs from its execute address.
+// Every address that FEX records, compares, branches to or hands to the instruction cache is the
+// execute address; only the store itself goes through JITWritePtr, or through an emitter, which
+// takes the difference when it is given its buffer.
+using JITWriteAddressPtr = void* (*)(const void* Exec, size_t Size);
+FEX_DEFAULT_VISIBILITY extern JITWriteAddressPtr JITGetWriteAddress;
+
+// Whether the hook above is installed. The frontend sets it before the first executable allocation.
+FEX_DEFAULT_VISIBILITY extern bool JITDualMapped;
+
+// How many bytes of generated code the host can hold at once, or 0 when it sets no limit.
+FEX_DEFAULT_VISIBILITY extern size_t JITCodeLimit;
+
+// The table of executable allocations with their write addresses. VirtualAlloc and VirtualFree
+// keep it; JITFindWriteDelta takes no lock, so an exception handler may call it.
+FEX_DEFAULT_VISIBILITY void JITRegisterAllocation(void* Exec, size_t Size);
+FEX_DEFAULT_VISIBILITY void JITUnregisterAllocation(void* Exec);
+FEX_DEFAULT_VISIBILITY ptrdiff_t JITFindWriteDelta(const void* Exec);
+
+// The distance from an execute address to its write address: 0 for memory that is written where
+// it lies, which is all memory on a host without the hook.
+inline ptrdiff_t JITWriteDelta(const void* Exec) {
+  return JITDualMapped ? JITFindWriteDelta(Exec) : 0;
+}
+
+// The address through which the memory at an execute address is written.
+template<typename T>
+inline T* JITWritePtr(T* Exec) {
+  return reinterpret_cast<T*>(reinterpret_cast<uintptr_t>(Exec) + static_cast<uintptr_t>(JITWriteDelta(Exec)));
+}
+
 enum class ProtectOptions : uint32_t {
   None = 0,
   Read = (1U << 0),
@@ -55,8 +92,12 @@ inline void* VirtualAlloc(void* Base, size_t Size, bool Execute = false, bool Co
     Parameter.Type = MemExtendedParameterAttributeFlags;
     Parameter.ULong64 = MEM_EXTENDED_PARAMETER_EC_CODE;
   };
-  return ::VirtualAlloc2(nullptr, Base, Size, Flags, Execute ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE, Execute ? &Parameter : nullptr,
-                         Execute ? 1 : 0);
+  void* Ptr = ::VirtualAlloc2(nullptr, Base, Size, Flags, Execute ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE,
+                              Execute ? &Parameter : nullptr, Execute ? 1 : 0);
+  if (Execute && Ptr && JITDualMapped) {
+    JITRegisterAllocation(Ptr, Size);
+  }
+  return Ptr;
 #else
   return ::VirtualAlloc(Base, Size, Flags, Execute ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE);
 #endif
@@ -67,6 +108,9 @@ inline void* VirtualAlloc(size_t Size, bool Execute = false, bool Commit = true)
 }
 
 inline void VirtualFree(void* Ptr, size_t Size) {
+  if (JITDualMapped) {
+    JITUnregisterAllocation(Ptr);
+  }
   ::VirtualFree(Ptr, 0, MEM_RELEASE);
 }
 
@@ -160,6 +204,10 @@ FEX_DEFAULT_VISIBILITY extern JITWriteProtectPtr JITWriteProtect;
  * Every write to memory from VirtualAlloc(..., true) goes inside one. Scopes don't nest, and the
  * thread must not run generated code while one is open.
  *
+ * On a host that maps generated code twice (see JITGetWriteAddress), the scope switches nothing,
+ * and its WriteAddress gives the address to store through. Code that stores into generated code
+ * takes that address from its scope, so that no store is written without one.
+ *
  * A scope can also count itself in a depth that belongs to the calling thread, such as its
  * InternalThreadState's JITWriteScopeDepth. A host that keeps generated code writable for every
  * thread lets a write outside a scope through, so code that writes to generated code from an
@@ -187,6 +235,13 @@ public:
   }
   JITWriteScope(const JITWriteScope&) = delete;
   JITWriteScope& operator=(const JITWriteScope&) = delete;
+
+  // The address through which the generated code at an execute address is written while the
+  // scope is open: the address itself, unless the host maps generated code twice.
+  template<typename T>
+  T* WriteAddress(T* Exec) const {
+    return JITWritePtr(Exec);
+  }
 
 private:
   uint32_t* CountedDepth {};

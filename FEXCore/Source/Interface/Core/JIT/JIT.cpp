@@ -549,7 +549,7 @@ static void DirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record, 
 
   {
     FEXCore::Allocator::JITWriteScope WriteScope;
-    std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(CallerAddress)).store(BranchInst, std::memory_order::relaxed);
+    std::atomic_ref<uint32_t>(*WriteScope.WriteAddress(reinterpret_cast<uint32_t*>(CallerAddress))).store(BranchInst, std::memory_order::relaxed);
   }
   ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(CallerAddress), 4);
 }
@@ -563,7 +563,7 @@ static void IndirectBlockDelinker(FEXCore::Context::ExitFunctionLinkData* Record
 
   {
     FEXCore::Allocator::JITWriteScope WriteScope;
-    std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(JumpThunkStartAddress)).store(BranchInst, std::memory_order::relaxed);
+    std::atomic_ref<uint32_t>(*WriteScope.WriteAddress(reinterpret_cast<uint32_t*>(JumpThunkStartAddress))).store(BranchInst, std::memory_order::relaxed);
   }
   ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
 
@@ -633,7 +633,7 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
 
     {
       FEXCore::Allocator::JITWriteScope WriteScope;
-      std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(CallerAddress)).store(BranchInst, std::memory_order::relaxed);
+      std::atomic_ref<uint32_t>(*WriteScope.WriteAddress(reinterpret_cast<uint32_t*>(CallerAddress))).store(BranchInst, std::memory_order::relaxed);
     }
     ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(CallerAddress), 4);
   } else {
@@ -644,13 +644,13 @@ uint64_t Arm64JITCore::ExitFunctionLink(FEXCore::Core::CpuStateFrame* Frame, FEX
     {
       FEXCore::Allocator::JITWriteScope WriteScope;
       // This case is common between calls and jumps as the thunk callsite can be left untouched.
-      std::atomic_ref<uint64_t>(Record->HostCode).store(HostCode, std::memory_order::seq_cst);
+      std::atomic_ref<uint64_t>(*WriteScope.WriteAddress(&Record->HostCode)).store(HostCode, std::memory_order::seq_cst);
 #ifdef ARCHITECTURE_arm64
       // Make memory write visible to other threads reading the same location
       asm volatile("dc cvau, %0; dsb ish" : : "r"(Record->HostCode) :);
 #endif
 
-      std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(JumpThunkStartAddress)).store(LdrInst, std::memory_order::relaxed);
+      std::atomic_ref<uint32_t>(*WriteScope.WriteAddress(reinterpret_cast<uint32_t*>(JumpThunkStartAddress))).store(LdrInst, std::memory_order::relaxed);
     }
     ARMEmitter::Emitter::ClearICache(reinterpret_cast<void*>(JumpThunkStartAddress), 4);
 
@@ -1176,7 +1176,7 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
 
     // Copy over CodeBuffer contents
     FEXCore::Allocator::JITWriteScope WriteScope;
-    memcpy(AllocatedInfo.BufferAllocationOffset, TempCodeBuffer, CodeData.Size);
+    memcpy(WriteScope.WriteAddress(AllocatedInfo.BufferAllocationOffset), TempCodeBuffer, CodeData.Size);
   }
 
   TempCodeBufferAllocator.DelayedDisownBuffer();
@@ -1223,7 +1223,7 @@ CPUBackend::CompiledCode Arm64JITCore::LoadCachedCode(std::span<const uint8_t> H
   uint8_t* Dest = AllocatedInfo.BufferAllocationOffset;
   {
     FEXCore::Allocator::JITWriteScope WriteScope;
-    memcpy(Dest, HostBytes.data(), HostBytes.size());
+    memcpy(WriteScope.WriteAddress(Dest), HostBytes.data(), HostBytes.size());
   }
   ClearICache(Dest, HostBytes.size());
 

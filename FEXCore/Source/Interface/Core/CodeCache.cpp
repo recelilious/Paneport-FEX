@@ -994,7 +994,7 @@ void CodeCache::FinalizeCodePages(MappedCodeCacheFile& Code, std::span<std::byte
   {
     Allocator::JITWriteScope WriteScope;
 #ifdef _M_ARM64EC
-    memcpy(Code.CodeBuffer.data() + StartOffset, Code.CodeBufferInFile.data() + StartOffset, Size);
+    memcpy(WriteScope.WriteAddress(Code.CodeBuffer.data() + StartOffset), Code.CodeBufferInFile.data() + StartOffset, Size);
 #endif
     for (size_t i = StartPage; i < EndPage; ++i) {
       auto PageRelocations = SpanPageRelocations(Code, i);
